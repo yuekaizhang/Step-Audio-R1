@@ -38,7 +38,7 @@ def mmau_test(model):
 
     full_text = ""
     try:
-        for response, text, audio in model.stream(messages, max_tokens=32000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
+        for response, text, audio in model.stream(messages, max_tokens=16000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
             if text:
                 full_text += text
     except Exception as e:
@@ -47,6 +47,41 @@ def mmau_test(model):
         traceback.print_exc()
 
     print("\n\nFull response:", full_text)
+
+
+def mmau_test_offline(model):
+    """Test multi-modal audio understanding with multiple choice questions (non-streaming)."""
+    question = "Which of the following best describes the male vocal in the audio?"
+    choices = ["Soft and melodic", "Aggressive and talking", "High-pitched and singing", "Whispering"]
+
+    question_text = f"{question}\nPlease choose the answer from the following options, do not provide any additional explanations or content: \n"
+    for i, choice in enumerate(choices):
+        question_text += f"{chr(65+i)}. {choice}\n"
+
+    messages = [
+        {"role": "human", "content": [
+            {"type": "text", "text": question_text},
+            {"type": "audio", "audio": "assets/mmau_test.wav"}
+        ]},
+        {"role": "assistant", "content": "<think>\n", "eot": False},
+    ]
+
+    try:
+
+        result = model.offline(
+            messages,
+            max_tokens=16000,
+            temperature=0.7,
+            repetition_penalty=1.0,
+            stop_token_ids=[151665],
+        )
+        print("\n\nFull response:", result["text"])
+        return result
+    except Exception as e:
+        print(f"Error during inference: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 def mmsu_test(model):
@@ -69,7 +104,7 @@ def mmsu_test(model):
 
     full_text = ""
     try:
-        for response, text, audio in model.stream(messages, max_tokens=32000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
+        for response, text, audio in model.stream(messages, max_tokens=16000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
             if text:
                 full_text += text
     except Exception as e:
@@ -99,7 +134,7 @@ def spoken_mqa_test(model):
 
     full_text = ""
     try:
-        for response, text, audio in model.stream(messages, max_tokens=32000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
+        for response, text, audio in model.stream(messages, max_tokens=16000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
             if text:
                 full_text += text
     except Exception as e:
@@ -125,7 +160,7 @@ def big_bench_audio_test(model):
 
     full_text = ""
     try:
-        for response, text, audio in model.stream(messages, max_tokens=32000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
+        for response, text, audio in model.stream(messages, max_tokens=16000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
             if text:
                 full_text += text
     except Exception as e:
@@ -160,7 +195,7 @@ def mmar_test(model):
 
     full_text = ""
     try:
-        for response, text, audio in model.stream(messages, max_tokens=32000, temperature=0.7, repetition_penalty=1.07, stop_token_ids=[151665]):
+        for response, text, audio in model.stream(messages, max_tokens=16000, temperature=0.7, repetition_penalty=1.07, stop_token_ids=[151665]):
             if text:
                 full_text += text
     except Exception as e:
@@ -186,7 +221,7 @@ def wild_speech_test(model):
 
     full_text = ""
     try:
-        for response, text, audio in model.stream(messages, max_tokens=32000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
+        for response, text, audio in model.stream(messages, max_tokens=16000, temperature=0.7, repetition_penalty=1.0, stop_token_ids=[151665]):
             if text:
                 full_text += text
     except Exception as e:
@@ -272,6 +307,39 @@ def Speaker_Trait_Inference(model):
     print("\n\nFull response:", full_text)
 
 
+def Speaker_Trait_Inference_offline(model):
+    """Test speaker trait inference with prompt_logprobs (non-streaming)."""
+    messages = [
+        {"role": "system", "content": "你是一个语音助手，你有非常丰富的音频处理经验。"},
+        {"role": "human", "content": [
+            {"type": "text", "text": "说话人的语气和音色如何反映他的性格和情绪特征？"},
+            {"type": "audio", "audio": "assets/Speaker_Trait_Inference.wav"},
+        ]},
+        {"role": "assistant", "content": "<think>\n", "eot": False},
+    ]
+    try:
+        result = model.offline(
+            messages,
+            max_tokens=2048,
+            temperature=0.7,
+            top_p=0.9,
+            stop_token_ids=[151665],
+            prompt_logprobs=0
+        )
+        print("\n\nFull response:", result["text"])
+        print("\n\nUsage:", result["usage"])
+        if result["prompt_logprobs"]:
+            print("\n\nPrompt logprobs (first 5):", result["prompt_logprobs"][:5] if len(result["prompt_logprobs"]) > 5 else result["prompt_logprobs"])
+        if result["logprobs"]:
+            print("\n\nLogprobs:", result["logprobs"])
+        return result
+    except Exception as e:
+        print(f"Error during inference: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -279,7 +347,9 @@ def Speaker_Trait_Inference(model):
 if __name__ == '__main__':
     # Initialize the model with API configuration
     api_url = "http://localhost:9999/v1/chat/completions"
-    model_name = "Step-Audio-R1"
+    api_url = "http://l20-2:9999/v1/chat/completions"
+    model_name = "Step-Audio-R1.1"
+
     
     model = StepAudioR1(api_url, model_name)
     
@@ -289,25 +359,26 @@ if __name__ == '__main__':
     print("=" * 80)
     
     # Music and Creative Analysis
-    song_appreciation(model)
-    Speaker_Trait_Inference(model)
+    # song_appreciation(model)
+    # Speaker_Trait_Inference(model)
     
-    # Universal Audio Caption
-    uac_test(model)
+    # # Universal Audio Caption
+    # uac_test(model)
     
-    # Math and Reasoning Tasks
-    spoken_mqa_test(model)
+    # # Math and Reasoning Tasks
+    # spoken_mqa_test(model)
     
     # Audio Understanding Tasks
-    mmau_test(model)
-    mmsu_test(model)
-    big_bench_audio_test(model)
+    # mmau_test(model)
+    mmau_test_offline(model)
+    # mmsu_test(model)
+    # big_bench_audio_test(model)
     
-    # Audio Reasoning
-    mmar_test(model)
+    # # Audio Reasoning
+    # mmar_test(model)
     
-    # Wild Speech Processing
-    wild_speech_test(model)
+    # # Wild Speech Processing
+    # wild_speech_test(model)
     
     print("=" * 80)
     print("Test Suite Completed")

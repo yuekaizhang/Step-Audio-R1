@@ -1,12 +1,14 @@
 import base64
+import io
 import json
 import logging
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
+import numpy as np
 import requests
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
@@ -42,6 +44,61 @@ def _load_audio_segment(audio_path: str) -> AudioSegment:
 
 class AudioService:
     """Audio processing utility that keeps the transformation reversible."""
+
+    @staticmethod
+    def read_audio_from_array(
+        audio_array: np.ndarray,
+        sampling_rate: int,
+        max_duration: float = 29.9
+    ) -> Optional[List[bytes]]:
+        """Read audio from numpy array (HuggingFace format) and split into WAV chunks as bytes."""
+        try:
+            # Convert numpy array to AudioSegment
+            # Ensure audio is in the correct format (int16)
+            if audio_array.dtype == np.float32 or audio_array.dtype == np.float64:
+                # Convert float [-1, 1] to int16
+                audio_array = (audio_array * 32767).astype(np.int16)
+            elif audio_array.dtype != np.int16:
+                audio_array = audio_array.astype(np.int16)
+
+            # Handle mono/stereo
+            if len(audio_array.shape) == 1:
+                channels = 1
+            else:
+                channels = audio_array.shape[1]
+                audio_array = audio_array.flatten()
+
+            # Create AudioSegment from raw data
+            audio = AudioSegment(
+                audio_array.tobytes(),
+                frame_rate=sampling_rate,
+                sample_width=2,  # 16-bit = 2 bytes
+                channels=channels
+            )
+
+            total_duration = len(audio) / 1000.0
+            logger.info(f"Audio duration: {total_duration:.2f}s")
+
+            audio_chunks: List[bytes] = []
+            max_duration_ms = int(max_duration * 1000)
+
+            if total_duration <= max_duration:
+                audio_chunks.append(audio.export(format="wav").read())
+            else:
+                num_chunks = int(total_duration // max_duration) + 1
+                logger.info(f"Splitting audio into {num_chunks} chunks")
+                for i in range(num_chunks):
+                    start_time = i * max_duration_ms
+                    end_time = min((i + 1) * max_duration_ms, len(audio))
+                    chunk = audio[start_time:end_time]
+                    audio_chunks.append(chunk.export(format="wav").read())
+
+            logger.info(f"Successfully processed audio array into {len(audio_chunks)} chunk(s)")
+            return audio_chunks
+
+        except Exception as exc:
+            logger.error(f"Failed to process audio array: {exc}", exc_info=True)
+            return None
 
     @staticmethod
     def read_audio_file(audio_path: str, max_duration: float = 29.9) -> Optional[List[bytes]]:
@@ -138,6 +195,62 @@ class StepAudioR1:
     def __call__(self, messages, **kwargs):
         return next(self.stream(messages, **kwargs, stream=False))
 
+    def offline(self, messages, stop=None, **kwargs):
+        """Non-streaming inference with full response and logprobs support."""
+        headers = {"Content-Type": "application/json"}
+        payload = kwargs.copy()
+        payload["messages"] = self.apply_chat_template(messages)
+        payload["model"] = self.model_name
+        payload["stream"] = False
+        payload["skip_special_tokens"] = False
+
+        if stop is None:
+            stop = ["<|EOT|>"]
+
+        if (
+            payload["messages"][-1].get("role", None) == "assistant"
+            and payload["messages"][-1].get("content", None) is None
+        ):
+            payload["messages"].pop(-1)
+            payload["continue_final_message"] = False
+            payload["add_generation_prompt"] = True
+        elif payload["messages"][-1].get("eot", True):
+            payload["continue_final_message"] = False
+            payload["add_generation_prompt"] = True
+        else:
+            payload["continue_final_message"] = True
+            payload["add_generation_prompt"] = False
+
+        response = requests.post(self.api_url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        print(response.json())
+        # input()
+
+        data = response.json()
+        choice_data = data['choices'][0]
+        message = choice_data['message']
+
+        # Extract text and audio
+        text = message.get('tts_content', {}).get('tts_text', None)
+        text = text if text is not None else message.get('content', '')
+
+        audio = message.get('tts_content', {}).get('tts_audio', None)
+        audio = [int(i) for i in StepAudioR1.audio_token_re.findall(audio)] if audio else None
+
+        # Extract logprobs if available (prompt_logprobs)
+        logprobs = choice_data.get('logprobs', None)
+        prompt_logprobs = choice_data.get('prompt_logprobs', None)
+
+        return {
+            "message": message,
+            "text": text,
+            "audio": audio,
+            "logprobs": logprobs,
+            "prompt_logprobs": prompt_logprobs,
+            "usage": data.get("usage", None),
+        }
+
     def log_request(self, payload):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = os.path.join(self.log_dir, f"request_{timestamp}.json")
@@ -172,7 +285,7 @@ class StepAudioR1:
             payload["continue_final_message"] = True
             payload["add_generation_prompt"] = False
 
-        self.log_request(payload)
+        # self.log_request(payload)
         
         with requests.post(self.api_url, headers=headers, json=payload, stream=stream) as response:
             response.raise_for_status()
@@ -216,13 +329,30 @@ class StepAudioR1:
         if item["type"] != "audio":
             return [item]
 
-        chunks = AudioService.read_audio_file(item["audio"], max_duration=25.0)
-        if not chunks:
-            logger.error(f"Failed to process audio item: {item['audio']}")
+        audio_input = item["audio"]
+
+        # Check if audio is a HuggingFace audio dict (with 'array' and 'sampling_rate')
+        if isinstance(audio_input, dict) and "array" in audio_input and "sampling_rate" in audio_input:
+            chunks = AudioService.read_audio_from_array(
+                audio_input["array"],
+                audio_input["sampling_rate"],
+                max_duration=25.0
+            )
+            if not chunks:
+                logger.error("Failed to process audio array")
+                return [item]
+        elif isinstance(audio_input, str):
+            # It's a file path
+            chunks = AudioService.read_audio_file(audio_input, max_duration=25.0)
+            if not chunks:
+                logger.error(f"Failed to process audio item: {audio_input}")
+                return [item]
+        else:
+            logger.error(f"Unsupported audio input type: {type(audio_input)}")
             return [item]
 
         encoded_chunks = AudioService.encode_audio_to_base64(chunks)
-        
+
         return [
             {"type": "input_audio", "input_audio": {"data": chunk, "format": "wav"}}
             for chunk in encoded_chunks
