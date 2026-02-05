@@ -16,7 +16,7 @@ import torchaudio
 from tqdm import tqdm
 
 # Default API configuration
-DEFAULT_API_BASE = "http://l20-2:9999/v1"
+DEFAULT_API_BASE = "http://l20-1:19000/v1"
 
 
 def get_model_name(api_base: str) -> str:
@@ -162,15 +162,20 @@ def extract_think(output_str: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def format_question(obj_dict: Dict[str, Any]) -> str:
+def format_question(obj_dict: Dict[str, Any], template: str = "qa") -> str:
     """Format question text from MMAU data item."""
     question = obj_dict['question']
     choices = obj_dict['choices']
-
-    question_text = f"{question}\nPlease choose the answer from the following options, do not provide any additional explanations or content:\n"
-    for i, choice in enumerate(choices):
-        question_text += f"{choice}\n"
-
+    if template == "qa":
+        question_text = f"{question}\nPlease choose the answer from the following options, do not provide any additional explanations or content:\n"
+        for i, choice in enumerate(choices):
+            question_text += f"{choice}\n"
+    elif template == "caption":
+        question_text = "Listen to the provided audio and produce a very detailed audio caption."
+    elif template == "open_qa":
+        question_text = question
+    else:
+        raise ValueError(f"Invalid template: {template}")
     return question_text
 
 
@@ -187,6 +192,7 @@ def parse_args():
     parser.add_argument("--start_idx", type=int, default=0, help="Start index for processing")
     parser.add_argument("--end_idx", type=int, default=None, help="End index for processing (exclusive)")
     parser.add_argument("--enable_thinking", action="store_true", help="Enable thinking")
+    parser.add_argument("--template", type=str, default="qa", choices=["qa", "caption", "open_qa"], help="Template for question formatting")
     parser.add_argument("--max_audio_in_seconds", type=int, default=29, help="Max audio duration in seconds (truncate if longer)")
     return parser.parse_args()
 
@@ -223,8 +229,7 @@ def main():
 
     for item in tqdm(datas, desc="Processing"):
         audio_path = os.path.join(args.audio_dir, item["audio_id"])
-        question_text = format_question(item)
-
+        question_text = format_question(item, template=args.template)
         try:
             result = call_audio_llm_api(
                 audio_path=audio_path,
@@ -244,6 +249,7 @@ def main():
             model_answer = extract_answer(full_response)
             model_think = extract_think(full_response)
             print(f"model_answer: {model_answer}")
+            print(f"model_response: {full_response}")
             # Build result record
             result_record = item.copy()
             result_record["model_output"] = model_answer

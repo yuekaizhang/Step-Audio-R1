@@ -9,8 +9,9 @@ from typing import Any, Dict, Optional
 import requests
 
 # vLLM API server configuration
-API_BASE = "http://l20-2:9999/v1"
-API_BASE = "http://l20-2:8000/v1"
+host = "h20-1"
+port = 9999
+API_BASE = f"http://{host}:{port}/v1"
 MODEL_NAME = None  # Auto-detect if None
 
 
@@ -36,7 +37,7 @@ def call_audio_llm_api(
     api_base: str = API_BASE,
     model_name: Optional[str] = MODEL_NAME,
     max_tokens: int = 16000,
-    temperature: float = 0.7,
+    temperature: float = 0.0,
     repetition_penalty: float = 1.0,
     stop_token_ids: Optional[list] = None,
 ) -> Dict[str, Any]:
@@ -71,21 +72,23 @@ def call_audio_llm_api(
     audio_base64 = load_audio_base64(audio_path)
 
     # Build payload
+    user_content = []
+    if question_text != "":
+        user_content.append({"type": "text", "text": question_text})
+    if audio_base64 != "":
+        user_content.append({
+            "type": "input_audio",
+            "input_audio": {
+                "data": audio_base64,
+                "format": "wav"
+            }
+        })
     payload = {
         "model": model,
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": question_text},
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": audio_base64,
-                            "format": "wav"
-                        }
-                    }
-                ]
+                "content": user_content,
             },
             {"role": "assistant", "content": answer_text},
         ],
@@ -148,21 +151,30 @@ def main(args):
     # Build question
     question = "Which of the following best describes the male vocal in the audio?"
     choices = ["Soft and melodic", "Aggressive and talking", "High-pitched and singing", "Whispering"]
-    question_text = f"{question}\nPlease choose the answer from the following options, do not provide any additional explanations or content:\n"
-    question_text = f"{question}\nPlease choose the answer from the following options, output the thinking process in <think> </think> and final answer in <answer> </answer>:\n"
-    question_text = f"{question}\nPlease choose the answer from the following options, output the thinking process in <think> </think> and final answer in <answer> </answer> (Tips: the ground truth is Aggressive and talking):\n"
-    for i, choice in enumerate(choices):
-        question_text += f"{chr(65+i)}. {choice}\n"
+    # question_text = f"{question}\nPlease choose the answer from the following options, do not provide any additional explanations or content:\n"
+    #question_text = f"{question}\nPlease choose the answer from the following options, output the thinking process in <think> </think> and final answer in <answer> </answer>:\n"
+    #question_text = f"{question}\nPlease choose the answer from the following options, output the thinking process in <think> </think> and final answer in <answer> </answer> (Tips: the ground truth is Aggressive and talking):\n"
+
+    # question_text = ""
+    # for i, choice in enumerate(choices):
+    #     question_text += f"{chr(65+i)}. {choice}\n"
+    question_text = "Listen to the provided audio and produce a very detailed audio caption."
+    # question_text = "Listen to the provided audio and produce an audio caption."
+    # question_text = question
 
     print(f"Loading audio: {args.audio}")
     print("Sending request...")
-
+    answer_text = "<think>\n"
+    # answer_text = ""
     # Call API
     result = call_audio_llm_api(
         audio_path=args.audio,
         question_text=question_text,
+        answer_text=answer_text,
         model_name=args.model,
     )
+
+    # print("\n\nFull response:", result)
 
     # Extract text
     text = extract_text_from_result(result)
