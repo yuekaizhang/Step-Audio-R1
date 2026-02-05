@@ -200,15 +200,24 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Check if output file already exists
-    if not args.force and os.path.exists(args.out_file) and os.path.getsize(args.out_file) > 0:
-        print(f"Output file {args.out_file} already exists. Use --force to regenerate.")
-        return
-
     # Create output directory if needed
     out_dir = os.path.dirname(args.out_file)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir)
+
+    # Load existing results for resume functionality
+    existing_results = []
+    processed_ids = set()
+    if not args.force and os.path.exists(args.out_file) and os.path.getsize(args.out_file) > 0:
+        try:
+            with open(args.out_file, "r") as f:
+                existing_results = json.load(f)
+            processed_ids = {item.get("audio_id") for item in existing_results if item.get("audio_id")}
+            print(f"Resuming: loaded {len(existing_results)} existing results, {len(processed_ids)} unique audio_ids")
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"Warning: Could not load existing results ({e}), starting fresh")
+            existing_results = []
+            processed_ids = set()
 
     # Load test data
     with open(args.data_file, "r") as f:
@@ -219,13 +228,23 @@ def main():
     end_idx = args.end_idx if args.end_idx is not None else len(datas)
     datas = datas[start_idx:end_idx]
 
+    # Filter out already processed samples
+    if processed_ids:
+        original_count = len(datas)
+        datas = [item for item in datas if item.get("audio_id") not in processed_ids]
+        print(f"Skipping {original_count - len(datas)} already processed samples")
+
     print(f"Processing {len(datas)} samples (index {start_idx} to {end_idx})")
+
+    if len(datas) == 0:
+        print("All samples already processed. Use --force to regenerate.")
+        return
 
     # Get model name once
     model_name = args.model or get_model_name(args.api_base)
     print(f"Using model: {model_name}")
 
-    final_output = []
+    final_output = existing_results.copy()
 
     for item in tqdm(datas, desc="Processing"):
         audio_path = os.path.join(args.audio_dir, item["audio_id"])
